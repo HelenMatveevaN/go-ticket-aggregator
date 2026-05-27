@@ -1,0 +1,26 @@
+# Скомпилированные бинарники Go
+/dist/
+/bin/
+go-ticket-aggregator
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Локальные переменные окружения и секреты
+.env
+.env.*
+!.env.example
+
+# Временные файлы IDE (VS Code, GoLand)
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Логи приложения
+*.log
