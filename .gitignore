@@ -24,3 +24,6 @@ go-ticket-aggregator
 
 # Логи приложения
 *.log
+
+# Прочие файлы
+.DS_Store
