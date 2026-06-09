@@ -24,8 +24,22 @@ type OutboxEvent struct {
 	CreatedAt time.Time
 }
 
-// OutboxRepository — контракт.
-// Домен требует от инфраструктуры уметь сохранять такие события в таблицу.
+// OutboxRepository — контракт
+// Домен требует от инфраструктуры уметь сохранять такие события в таблицу
+// Дополняем контракт для фонового воркера
 type OutboxRepository interface {
 	Save(ctx context.Context, event *OutboxEvent) error
+
+	//Глаза и руки нашего будущего фонового воркера Kafka
+	//Они реализуют гарантию доставки сообщений At-Least-Once (минимум один раз)
+
+	//GetPendingEvents - Сборщик посылок, заставляет приложение раз в секунду заглядывать в таблицу
+	//и забирать пачку (батч) из свежих посылок
+	GetPendingEvents(ctx context.Context, limit int) ([]*OutboxEvent, error)
+
+	//MarkAsProcessed - Штамп об отправке, Когда воркер забрал событие из базы, 
+	//он берет его и отправляет в брокер Кафка.
+	//Как только Кафка ответила "order.created", воркер вызывает метод MarkAsProcessed.
+	//Меняет статус с pending на processed (обработано)
+	MarkAsProcessed(ctx context.Context, id string) error
 }

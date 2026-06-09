@@ -1,5 +1,5 @@
 -- Включаем расширение для генерации UUID
-create extension if not exists "uuid-ossp"
+create extension if not exists "uuid-ossp";
 
 -- =========================================================================
 -- 1. ДОМЕН МЕРОПРИЯТИЙ (Каталог)
