@@ -2,16 +2,31 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"go-ticket-aggregator/internal/domain"
+	//"github.com/jackc/pgx/v4"
+	"github.com/go-redis/redis/v8"
+
+	//"go-ticket-aggregator/internal/domain"
 	"go-ticket-aggregator/internal/config"
 	"go-ticket-aggregator/internal/infrastructure/repository"
 )
+
+//мероприятие
+type Event struct {
+	ID             string
+	Title          string
+	Category       string
+	StartTime      time.Time
+	Location       string
+	MinPrice       float64
+	Status         string
+}
 
 func main(){
 	//load config
@@ -19,11 +34,12 @@ func main(){
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	log.Printf("[INIT] Starting: %s (version: %s)", cfg.App.Name, cfg.App.Version)
+	/*log.Printf("[INIT] Starting: %s (version: %s)", cfg.App.Name, cfg.App.Version)
 	log.Printf("[INIT] Running environment: [%s]", cfg.App.Env)
 	log.Printf("[INIT] HTTP Server config -> : Port: %s, Timeout: %s", cfg.HTTP.Port, cfg.HTTP.Timeout)
 	log.Printf("[INIT] Postgres config -> Pool Max Conns: %d, Min Conns: %d", cfg.Postgres.MaxConns, cfg.Postgres.MinConns)
 	log.Printf("[INIT] Kafka config -> Brokers: %v, Group: %s", cfg.Kafka.Brokers, cfg.Kafka.ConsumerGroup)
+	*/
 
 	//create context with cancel by signals
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -33,17 +49,19 @@ func main(){
 	// DEPENDENCY INJECTION (DI ГРАФ)
 	// =========================================================================
 	//DI-граф: Конфиг ➔ dbPool ➔ txManager ➔ ticketRepo ➔ ticketUseCase
+
+	//рождение пула (подготовка "линий")
 	dbPool, err := repository.NewPostgresPool(ctx, cfg.Postgres)
 	if err != nil {
 		//log.Fatalf("Failed to initialize Postgres: %v", err)
 		log.Printf("[WARNING] Postgres pool cannot connect: %v. Running in offline-mode.", err)
 	}
 
-	txManager := repository.NewPostgresTxManager(dbPool) //DI-2: init менеджер транзакций
-	ticketRepo := repository.NewPostgresTicketRepository(txManager) //DI-3: create репозитория билетов, push в него txManager
+	//txManager := repository.NewPostgresTxManager(dbPool) //DI-2: init менеджер транзакций
+	//ticketRepo := repository.NewPostgresTicketRepository(txManager) //DI-3: create репозитория билетов, push в него txManager
 
-	orderRepo  := repository.NewPostgresOrderRepository(txManager)
-	outboxRepo := repository.NewPostgresOutboxRepository(txManager)
+	//orderRepo  := repository.NewPostgresOrderRepository(txManager)
+	//outboxRepo := repository.NewPostgresOutboxRepository(txManager)
 
 	// =========================================================================
 	// паттерн CLOSER (ГАРАНТИРОВАННЫЙ ПОРЯДОК ЗАВЕРШЕНИЯ) - (Graceful Shutdown)
@@ -77,7 +95,7 @@ func main(){
 	// ИНТЕГРАЦИОННОЕ ТЕСТИРОВАНИЕ МЕГА-ТРАНЗАКЦИИ
 	// =========================================================================
 
-	if dbPool != nil {
+	/*if dbPool != nil {
 		// Сбросим статус билета перед тестом (для удобства повторных запусков)
 		testTicketID := "44444444-1111-1111-1111-111111111111"
 		resetQuery := "UPDATE tickets SET status = 'available' WHERE id = $1;"
@@ -145,6 +163,80 @@ func main(){
 	} else {
 		// ИСПРАВЛЕНО: Если база выключена, просто пишем об этом в лог и не падаем!
 		log.Println("\n[SERVER] База данных недоступна. Интеграционные тесты мега-транзакции пропущены.")
+	}
+
+	*/
+
+	// =========================================================================
+	// ВИТРИНЫ: КЭШИРОВАНИЕ ЧЕРЕЗ REDIS (ЗАЩИТА ОТ НАПЛЫВА)
+	// =========================================================================
+	log.Println("[REDIS] Подключение к изолированной быстрой памяти...")
+
+	//	подключение к новому Redis (порт 6379)
+	rdb := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+	})
+
+	// Проверяем связь с Redis через Ping
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		log.Printf("[WARNING] Redis недоступен: %v. Защита Витрины отключена!", err)
+	} else {
+		log.Println("[REDIS] 🛡 Бронежилет активирован! Успешное подключение к кэшу.")
+	}
+
+	fmt.Println("\n=============================================")
+	fmt.Println("         --- НАША ВИТРИНА МЕРОПРИЯТИЙ ---    ")
+	fmt.Println("=============================================")
+
+	// Ключ («стикер») для хранения нашей Витрины в Redis
+	cacheKey := "widget:events:list"
+
+	// поиск данных в кеше (redis)
+	cachedData, err := rdb.Get(ctx, cacheKey).Result()
+
+	if err == nil {
+		// КЭШ-ХИТ (Попадание)! Данные нашлись в быстрой памяти.
+		log.Println("[CACHE HIT] 🚀 Мгновенно отдаем данные из Redis! База PostgreSQL отдыхает.")
+		fmt.Println(cachedData) // Мгновенно выводим сохраненный текст пользователю
+	} else {
+		// КЭШ-МИСС (Промах). В Redis пусто, придется делать тяжелый запрос в PostgreSQL
+		log.Println("[CACHE MISS] 🔍 В Redis пусто. Идем в PostgreSQL через dbPool...")
+
+		query := `SELECT id, title, description, start_at, status FROM events`
+		rows, err := dbPool.Query(ctx, query)
+		if err != nil {
+			log.Printf("[ERROR] Не удалось загрузить Витрину: %v", err)
+		} else {
+			defer rows.Close()
+			
+			var buffer string // Сюда соберем текст Витрины для сохранения в Redis
+	
+			for rows.Next() {
+				var id, title, description, status string
+				var startAt time.Time
+
+				if err := rows.Scan(&id, &title, &description, &startAt, &status); err != nil {
+					log.Printf("[ERROR] Ошибка чтения строки: %v", err)
+					break
+				}
+
+				// Формируем строчку для карточки мероприятия
+				card := fmt.Sprintf("🎭 %s\n📝 Описание: %s\n📅 Когда: %s\n🟢 Статус: %s\n---------------------------------------------\n", 
+					title, description, startAt.Format("02.01.2006 15:04"), status)
+				fmt.Print(card)
+				buffer += card //копия в буфер
+			}
+
+			// 3. ЗАПИСЫВАЕМ СНИМОК В REDIS
+			if buffer != "" {
+				err = rdb.Set(ctx, cacheKey, buffer, 5 * time.Minute).Err()
+				if err != nil {
+					log.Printf("[WARNING] Не удалось сохранить снимок в Redis: %v", err)
+				} else {
+					log.Println("[REDIS] 📝 Снимок Витрины успешно сохранен в кэш на 5 минут!")
+				}
+			}
+		}
 	}
 
 	// =========================================================================

@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  ticket_db:
+    image: postgres:15-alpine
+    container_name: ticket_db_container
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_DB: ticket_aggregator
+    ports:
+      - "5439:5432" # Внешний порт 5439, чтобы не конфликтовать со старыми проектами
+    volumes:
+      - ticket_db_data:/var/lib/postgresql/data
+
+  # собственный, изолированный Redis для защиты Витрины!
+  ticket_redis:
+    image: redis:7-alpine
+    container_name: ticket_redis_container
+    ports:
+      - "6379:6379" # Стандартный порт Redis
+    volumes:
+      - ticket_redis_data:/data
+
+volumes:
+  ticket_db_data:
+  ticket_redis_data:
