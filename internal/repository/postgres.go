@@ -11,6 +11,11 @@ import (
 )
 
 //NewPostgresPool инициализирует пул соединений v4
+/*
+это фабрика, которая создает «розетку» 
+(физический пул сырых сетевых соединений с PostgreSQL на порту 5439). 
+Этот пул в приложении должен быть ровно один на весь проект (паттерн Синглтон).
+*/
 func NewPostgresPool(ctx context.Context, cfg config.PostgresConfig) (*pgxpool.Pool, error) {
 	//1 - парсим базовую строку подключения
 	poolConfig, err := pgxpool.ParseConfig(cfg.URL)

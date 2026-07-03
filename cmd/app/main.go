@@ -14,11 +14,12 @@ import (
 
 	//"go-ticket-aggregator/internal/domain"
 	"go-ticket-aggregator/internal/config"
-	"go-ticket-aggregator/internal/infrastructure/repository"
+	"go-ticket-aggregator/internal/repository"
+	"go-ticket-aggregator/internal/usecase"
 )
 
 //мероприятие
-type Event struct {
+/*type Event struct {
 	ID             string
 	Title          string
 	Category       string
@@ -26,7 +27,7 @@ type Event struct {
 	Location       string
 	MinPrice       float64
 	Status         string
-}
+}*/
 
 func main(){
 	//load config
@@ -168,75 +169,29 @@ func main(){
 	*/
 
 	// =========================================================================
-	// ВИТРИНЫ: КЭШИРОВАНИЕ ЧЕРЕЗ REDIS (ЗАЩИТА ОТ НАПЛЫВА)
+	// СБОРКА СЛОЕВ ВИТРИНЫ ПО CLEAN ARCHITECTURE (DI-ГРАФ)
 	// =========================================================================
 	log.Println("[REDIS] Подключение к изолированной быстрой памяти...")
-
-	//	подключение к новому Redis (порт 6379)
 	rdb := redis.NewClient(&redis.Options{
 		Addr: "localhost:6379",
 	})
 
-	// Проверяем связь с Redis через Ping
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		log.Printf("[WARNING] Redis недоступен: %v. Защита Витрины отключена!", err)
-	} else {
-		log.Println("[REDIS] 🛡 Бронежилет активирован! Успешное подключение к кэшу.")
-	}
+	// Инициализируем репозиторий (Перенесли тяжелый SQL-запрос в internal/repository)
+	eventRepo := repository.NewEventRepository(dbPool)
 
+	// Инициализируем UseCase (Перенесли логику "бронежилета" в internal/usecase)
+	eventUseCase := usecase.NewEventUseCase(eventRepo, rdb)
+
+	// Вызываем бизнес-логику нашей Витрины
 	fmt.Println("\n=============================================")
 	fmt.Println("         --- НАША ВИТРИНА МЕРОПРИЯТИЙ ---    ")
 	fmt.Println("=============================================")
 
-	// Ключ («стикер») для хранения нашей Витрины в Redis
-	cacheKey := "widget:events:list"
-
-	// поиск данных в кеше (redis)
-	cachedData, err := rdb.Get(ctx, cacheKey).Result()
-
-	if err == nil {
-		// КЭШ-ХИТ (Попадание)! Данные нашлись в быстрой памяти.
-		log.Println("[CACHE HIT] 🚀 Мгновенно отдаем данные из Redis! База PostgreSQL отдыхает.")
-		fmt.Println(cachedData) // Мгновенно выводим сохраненный текст пользователю
+	showcaseData, err := eventUseCase.GetShowcaseEvents(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Не удалось отобразить Витрину: %v", err)
 	} else {
-		// КЭШ-МИСС (Промах). В Redis пусто, придется делать тяжелый запрос в PostgreSQL
-		log.Println("[CACHE MISS] 🔍 В Redis пусто. Идем в PostgreSQL через dbPool...")
-
-		query := `SELECT id, title, description, start_at, status FROM events`
-		rows, err := dbPool.Query(ctx, query)
-		if err != nil {
-			log.Printf("[ERROR] Не удалось загрузить Витрину: %v", err)
-		} else {
-			defer rows.Close()
-			
-			var buffer string // Сюда соберем текст Витрины для сохранения в Redis
-	
-			for rows.Next() {
-				var id, title, description, status string
-				var startAt time.Time
-
-				if err := rows.Scan(&id, &title, &description, &startAt, &status); err != nil {
-					log.Printf("[ERROR] Ошибка чтения строки: %v", err)
-					break
-				}
-
-				// Формируем строчку для карточки мероприятия
-				card := fmt.Sprintf("🎭 %s\n📝 Описание: %s\n📅 Когда: %s\n🟢 Статус: %s\n---------------------------------------------\n", 
-					title, description, startAt.Format("02.01.2006 15:04"), status)
-				fmt.Print(card)
-				buffer += card //копия в буфер
-			}
-
-			// 3. ЗАПИСЫВАЕМ СНИМОК В REDIS
-			if buffer != "" {
-				err = rdb.Set(ctx, cacheKey, buffer, 5 * time.Minute).Err()
-				if err != nil {
-					log.Printf("[WARNING] Не удалось сохранить снимок в Redis: %v", err)
-				} else {
-					log.Println("[REDIS] 📝 Снимок Витрины успешно сохранен в кэш на 5 минут!")
-				}
-			}
-		}
+		fmt.Print(showcaseData) // Просто выводим результат работы UseCase
 	}
 
 	// =========================================================================
