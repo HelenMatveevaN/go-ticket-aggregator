@@ -1,27 +1,51 @@
 version: '3.8'
 
 services:
-  ticket_db:
-    image: postgres:15-alpine
-    container_name: ticket_db_container
+  # Наше Go-приложение
+  ticket-app:
+    build: .
+    container_name: ticket-app
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres-db:
+        condition: service_healthy # Ждем, пока Postgres полностью запустится
+      redis-db:
+        condition: service_started # Ждем старта Redis
+    networks:
+      - ticket-network
+
+  # База данных PostgreSQL
+  postgres-db:
+    image: postgres:16-alpine
+    container_name: postgres-db
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ticket_aggregator
-    ports:
-      - "5439:5432" # Внешний порт 5439, чтобы не конфликтовать со старыми проектами
     volumes:
-      - ticket_db_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d # Авто-накат ваших SQL таблиц
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ticket-network
+    healthcheck: # Проверка, что база готова принимать соединения
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ticket_aggregator"]
+      interval: 5s
+      timeout: 5s
 
-  # собственный, изолированный Redis для защиты Витрины!
-  ticket_redis:
+  # Быстрый кэш Redis
+  redis-db:
     image: redis:7-alpine
-    container_name: ticket_redis_container
+    container_name: redis-db
     ports:
       - "6379:6379" # Стандартный порт Redis
-    volumes:
-      - ticket_redis_data:/data
+    networks:
+      - ticket-network
 
+networks:
+  ticket-network:
+    name: ticket-network
+
+# Секция описания создаваемого постоянного хранилища
 volumes:
-  ticket_db_data:
-  ticket_redis_data:
+  postgres_data:

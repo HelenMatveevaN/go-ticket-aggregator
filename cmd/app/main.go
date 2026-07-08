@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"fmt"
+	//"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
+	//"time"
 
 	//"github.com/jackc/pgx/v4"
 	"github.com/go-redis/redis/v8"
@@ -63,32 +64,6 @@ func main(){
 
 	//orderRepo  := repository.NewPostgresOrderRepository(txManager)
 	//outboxRepo := repository.NewPostgresOutboxRepository(txManager)
-
-	// =========================================================================
-	// паттерн CLOSER (ГАРАНТИРОВАННЫЙ ПОРЯДОК ЗАВЕРШЕНИЯ) - (Graceful Shutdown)
-	// =========================================================================
-
-	go func() {
-		<-ctx.Done() //сюда прилетит сигнал Cntrl+C
-		log.Printf("[SHUTDOWN] Graceful shutdown initialized... Closing resources.")
-
-		//даем фикс.вр. на закрытие "хвостов"
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
-		defer cancel()
-
-		//step1 : останавливаем вх.потоки (серверы, консьюмеры)
-		//далее вставим сюда http.Shutdown
-		log.Printf("[SHUTDOWN] Step 1: Stopping HTTP/gRPC traffic... (No new requests allowed)")
-		time.Sleep(500 * time.Millisecond)
-
-		//step2 : закрываем слои хранения и базы данных
-		//но - только после того, как вх.поток иссяк!
-		log.Printf("[SHUTDOWN] Step 2: Closing Storage layers...")
-		dbPool.Close()
-		log.Printf("[SHUTDOWN] PostgreSQL connection pool closed cleanly.")
-
-		_ = shutdownCtx //заглушка для будущих операций с переменной
-	}()
 
 	log.Printf("[SERVER] Application successfully initialized in [%s] mode.", cfg.App.Env)
 
@@ -173,30 +148,70 @@ func main(){
 	// =========================================================================
 	log.Println("[REDIS] Подключение к изолированной быстрой памяти...")
 	rdb := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
+		Addr: "redis-db:6379",
 	})
 
-	// Инициализируем репозиторий (Перенесли тяжелый SQL-запрос в internal/repository)
+	// Инициализируем репозиторий и UseCase
 	eventRepo := repository.NewEventRepository(dbPool)
-
-	// Инициализируем UseCase (Перенесли логику "бронежилета" в internal/usecase)
 	eventUseCase := usecase.NewEventUseCase(eventRepo, rdb)
 
-	// Вызываем бизнес-логику нашей Витрины
-	fmt.Println("\n=============================================")
-	fmt.Println("         --- НАША ВИТРИНА МЕРОПРИЯТИЙ ---    ")
-	fmt.Println("=============================================")
-
-	showcaseData, err := eventUseCase.GetShowcaseEvents(ctx)
-	if err != nil {
-		log.Printf("[ERROR] Не удалось отобразить Витрину: %v", err)
-	} else {
-		fmt.Print(showcaseData) // Просто выводим результат работы UseCase
+	// =========================================================================
+	// ИНИЦИАЛИЗАЦИЯ HTTP СЕРВЕРА
+	// =========================================================================
+	server := &http.Server{
+		Addr: ":" + cfg.HTTP.Port,
 	}
 
 	// =========================================================================
-	// РАБОТА СЕРВЕРА
+	// паттерн CLOSER (Graceful Shutdown)
+	// =========================================================================
+
+	go func() {
+		<-ctx.Done() //сюда прилетит сигнал Cntrl+C
+		log.Printf("[SHUTDOWN] Graceful shutdown initialized... Closing resources.")
+
+		//даем фикс.вр. на закрытие "хвостов"
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+		defer cancel()
+
+		// step 1: останавливаем входящий HTTP-трафик
+		log.Printf("[SHUTDOWN] Step 1: Stopping HTTP/gRPC traffic... (No new requests allowed)")
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("[WARNING] HTTP server shutdown error: %v", err)
+		}
+
+		// step 2: закрываем базы данных (только после остановки сервера!)
+		log.Printf("[SHUTDOWN] Step 2: Closing Storage layers...")
+		dbPool.Close()
+		log.Printf("[SHUTDOWN] PostgreSQL connection pool closed cleanly.")
+	}()
+
+	// =========================================================================
+	// РЕГИСТРАЦИЯ МАРШРУТОВ (ЭНДПОИНТОВ)
+	// =========================================================================
+	http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		// Вызываем бизнес-логику нашей Витрины при каждом GET-запросе
+		showcaseData, err := eventUseCase.GetShowcaseEvents(r.Context())
+		if err != nil {
+			log.Printf("[ERROR] Не удалось отобразить Витрину: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"failed to get events"}`))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(showcaseData)) // Отдаем данные витрины в curl / браузер
+	})
+
+	// =========================================================================
+	// ЗАПУСК СЕРВЕРА
 	// =========================================================================
 	log.Println("\n[SERVER] Работа завершена. Нажмите Ctrl+C для проверки Closer...")
-	<-ctx.Done()
+
+	// ListenAndServe блокирует поток main и держит приложение запущенным
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("HTTP server failed: %v", err)
+	}	
 }

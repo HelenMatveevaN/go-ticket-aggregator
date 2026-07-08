@@ -1,7 +1,7 @@
 # Скомпилированные бинарники Go
 /dist/
 /bin/
-go-ticket-aggregator
+myservice
 *.exe
 *.exe~
 *.dll
@@ -16,6 +16,7 @@ go-ticket-aggregator
 # Временные файлы IDE (VS Code, GoLand)
 .idea/
 .vscode/
+vendor/
 *.suo
 *.ntvs*
 *.njsproj
@@ -26,4 +27,5 @@ go-ticket-aggregator
 *.log
 
 # Прочие файлы
+*.DS_Store
 .DS_Store
