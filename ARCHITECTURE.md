@@ -7,35 +7,41 @@
 Сервис спроектирован по принципам чистой архитектуры (Clean Architecture). Слои строго изолированы друг от друга через интерфейсы.
 
 ```mermaid
-componentDiagram
-    Title: C4 Component Diagram — Агрегатор Билетов
+flowchart TD
+    Title[C4 Component Diagram — Агрегатор Билетов]
+    Title --- handler
 
-    Boundary(api, "Интерфейс ввода (Перенос в Веб-сервер)") {
-        [HTTP Handler] as handler
-    }
+    %% Границы слоев (Subgraphs)
+    subgraph api ["Интерфейс ввода (Веб-сервер)"]
+        handler["HTTP Handler (net/http)"]
+    end
 
-    Boundary(business, "Бизнес-логика") {
-        [Event UseCase] as uc
-    }
+    subgraph business ["Бизнес-логика"]
+        uc["Event UseCase"]
+    end
 
-    Boundary(storage, "Слой хранения данных") {
-        [Postgres Repository] as pg_repo
-        [Redis Cache Repository] as redis_repo
-    }
+    subgraph storage ["Слой хранения данных"]
+        pg_repo["Postgres Repository (pgxpool)"]
+        redis_repo["Redis Cache Repository"]
+    end
 
-    handler --> uc : Вызов бизнес-логики (Контекст)
-    uc --> redis_repo : 1. Запрос кэша (Get)
-    uc --> pg_repo : 2. Запрос БД при Cache Miss
+    subgraph infra ["Внешняя инфраструктура"]
+        db_events[("PostgreSQL <br/> (Таблица: events)")]
+        db_cache[("Redis <br/> (Кэш: showcase)")]
+    end
 
-    database "PostgreSQL" #database {
-        [Таблица: events] as db_events
-    }
-    database "Redis" #database {
-        [Кэш: showcase] as db_cache
-    }
+    %% Связи и направления потоков данных
+    handler -->|Вызов бизнес-логики| uc
+    uc -->|1. Запрос кэша (Get)| redis_repo
+    uc -->|2. При Cache Miss (Select)| pg_repo
 
-    pg_repo --> db_events : SQL (pgxpool)
-    redis_repo --> db_cache : TCP (go-redis)
+    pg_repo --> db_events
+    redis_repo --> db_cache
+
+    %% Стилизация для красоты (Senior-touch)
+    style Title fill:none,stroke:none,font-weight:bold,font-size:16px
+    classDef database fill:#232f3e,stroke:#3f4f5f,color:#fff;
+    class db_events,db_cache database;
 ```
 
 ## 2. Сценарий: Получение витрины мероприятий (Sequence Diagram)
