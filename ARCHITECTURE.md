@@ -8,9 +8,6 @@
 
 ```mermaid
 flowchart TD
-    Title[C4 Component Diagram — Агрегатор Билетов]
-    Title --- handler
-
     %% Границы слоев (Subgraphs)
     subgraph api ["Интерфейс ввода (Веб-сервер)"]
         handler["HTTP Handler (net/http)"]
@@ -26,20 +23,19 @@ flowchart TD
     end
 
     subgraph infra ["Внешняя инфраструктура"]
-        db_events[("PostgreSQL <br/> (Таблица: events)")]
-        db_cache[("Redis <br/> (Кэш: showcase)")]
+        db_events[("PostgreSQL <br/> Таблица: events")]
+        db_cache[("Redis <br/> Кэш: showcase")]
     end
 
-    %% Связи и направления потоков данных
+    %% Связи и направления потоков данных без служебных символов
     handler -->|Вызов бизнес-логики| uc
-    uc -->|1. Запрос кэша (Get)| redis_repo
-    uc -->|2. При Cache Miss (Select)| pg_repo
+    uc -->|1. Запрос кэша из Redis| redis_repo
+    uc -->|2. При Cache Miss запрос к БД| pg_repo
 
     pg_repo --> db_events
     redis_repo --> db_cache
 
-    %% Стилизация для красоты (Senior-touch)
-    style Title fill:none,stroke:none,font-weight:bold,font-size:16px
+    %% Стилизация компонентов
     classDef database fill:#232f3e,stroke:#3f4f5f,color:#fff;
     class db_events,db_cache database;
 ```
