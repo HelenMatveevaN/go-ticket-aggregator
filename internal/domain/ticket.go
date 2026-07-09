@@ -1,46 +1,69 @@
+//Домен билета
+
 package domain
 
 import (
+	"context"
 	"errors"
 	"time"
 )
 
-//Домен билета
+// Статусы билета
+const (
+	StatusAvailable = "available"
+	StatusHeld      = "held"
+	StatusSold      = "sold"
+)
 
 //доменные ошибки, понятные бизнес-логике
 var (
-	ErrTicketNotFound = errors.New("ticket not found")
-	ErrTicketAlreadyHeld = errors.New("ticket is already held or sold")
+	ErrTicketAlreadyHeld = errors.New("билет уже забронирован или продан")
+	ErrTicketNotFound = errors.New("билет не найден")
 )
 
-//value object
 type Price struct {
-	Amount float64
-	Currency string
+	AmountCents int64  // храним деньги в копейках (например, 150000 вместо 1500.00)
+	Currency    string
 }
 
-//	это entite (сущность). у нее есть уникальный id и жизненный цикл
+// Ticket описывает конкретное место на мероприятии
 type Ticket struct {
 	ID        string
 	ZoneID    string
-	SeatID    *string
-	Status    string
-	Price     Price // Внедряем наш Value Object
+	SeatID    string
+	EventID   int64     // Привязка к мероприятию
+	Status    string    // "available", "held", "sold"
 	Version   int
-	UpdatedAt time.Time
+	Price     Price
+	LockedAt  time.Time 
+	UpdatedAt time.Time // Добавили поле, чтобы метод Hold() работал
 }
 
-//доменная проверка: можно забронировать билет?
-func (t *Ticket) CanBeHeld() bool {
-	return t.Status == "available"
-}
-
-//переводим сущность в состояние брони
+// Hold переводит билет в статус брони на уровне бизнес-логики
 func (t *Ticket) Hold() error {
-	if !t.CanBeHeld(){
+	if t.Status != StatusAvailable {
 		return ErrTicketAlreadyHeld
 	}
-	t.Status = "held"
-	t.UpdatedAt = time.Now()
+	now := time.Now()
+	t.Status = StatusHeld
+	t.LockedAt = now
+	t.UpdatedAt = now
 	return nil
 }
+
+// TicketRepository — интерфейс репозитория, который лежит в домене.
+// Слой инфраструктуры (repository) будет обязан его реализовать.
+type TicketRepository interface {
+	GetAvailableTicketWithLock(ctx context.Context, eventID int64) (*Ticket, error)
+	UpdateStatus(ctx context.Context, ticket *Ticket) error
+
+	// НОВЫЙ МЕТОД ДЛЯ ДВОРНИКА:
+	// Находит все билеты со статусом 'held', у которых locked_at меньше, чем expireTime,
+	// и переводит их обратно в 'available'. Возвращает количество очищенных билетов.
+	CancelExpiredBookings(ctx context.Context, expireTime time.Time) (int64, error)
+}
+
+// TransactionManager — интерфейс управления транзакциями, который видит домен
+//type TransactionManager interface {
+//	WithinTransaction(ctx context.Context, fn func(ctx context.Context) error) error
+//}

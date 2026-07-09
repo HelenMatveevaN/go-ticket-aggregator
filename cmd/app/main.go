@@ -2,33 +2,21 @@ package main
 
 import (
 	"context"
-	//"fmt"
+	"fmt"
 	"log"
+	//"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	//"time"
 
-	//"github.com/jackc/pgx/v4"
 	"github.com/go-redis/redis/v8"
 
-	//"go-ticket-aggregator/internal/domain"
 	"go-ticket-aggregator/internal/config"
 	"go-ticket-aggregator/internal/repository"
 	"go-ticket-aggregator/internal/usecase"
 )
-
-//мероприятие
-/*type Event struct {
-	ID             string
-	Title          string
-	Category       string
-	StartTime      time.Time
-	Location       string
-	MinPrice       float64
-	Status         string
-}*/
 
 func main(){
 	//load config
@@ -36,12 +24,6 @@ func main(){
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	/*log.Printf("[INIT] Starting: %s (version: %s)", cfg.App.Name, cfg.App.Version)
-	log.Printf("[INIT] Running environment: [%s]", cfg.App.Env)
-	log.Printf("[INIT] HTTP Server config -> : Port: %s, Timeout: %s", cfg.HTTP.Port, cfg.HTTP.Timeout)
-	log.Printf("[INIT] Postgres config -> Pool Max Conns: %d, Min Conns: %d", cfg.Postgres.MaxConns, cfg.Postgres.MinConns)
-	log.Printf("[INIT] Kafka config -> Brokers: %v, Group: %s", cfg.Kafka.Brokers, cfg.Kafka.ConsumerGroup)
-	*/
 
 	//create context with cancel by signals
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -59,8 +41,8 @@ func main(){
 		log.Printf("[WARNING] Postgres pool cannot connect: %v. Running in offline-mode.", err)
 	}
 
-	//txManager := repository.NewPostgresTxManager(dbPool) //DI-2: init менеджер транзакций
-	//ticketRepo := repository.NewPostgresTicketRepository(txManager) //DI-3: create репозитория билетов, push в него txManager
+	txManager := repository.NewPostgresTxManager(dbPool) //DI-2: init менеджер транзакций
+	ticketRepo := repository.NewPostgresTicketRepository(txManager) //DI-3: create репозитория билетов, push в него txManager
 
 	//orderRepo  := repository.NewPostgresOrderRepository(txManager)
 	//outboxRepo := repository.NewPostgresOutboxRepository(txManager)
@@ -155,6 +137,11 @@ func main(){
 	eventRepo := repository.NewEventRepository(dbPool)
 	eventUseCase := usecase.NewEventUseCase(eventRepo, rdb)
 
+	// Собираем нашу Кассу (UseCase Блока 2)
+	bookingUseCase := usecase.NewBookingUseCase(txManager, ticketRepo)
+	_ = bookingUseCase // Гасим ошибку неиспользованной переменной
+
+
 	// =========================================================================
 	// ИНИЦИАЛИЗАЦИЯ HTTP СЕРВЕРА
 	// =========================================================================
@@ -203,6 +190,45 @@ func main(){
 
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(showcaseData)) // Отдаем данные витрины в curl / браузер
+	})
+
+	// НОВОЕ: Маршрут Кассы (Бронирование билета)
+	// Сюда клиент будет слать POST-запрос вида: /bookings?event_id=5
+	http.HandleFunc("/bookings", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		// строго проверяем HTTP-метод. Бронирование должно быть только через POST
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			w.Write([]byte(`{"error":"method not allowed, use POST"}`))
+			return
+		}
+
+		// Достаем event_id из параметров запроса (например, /bookings?event_id=5)
+		eventIDStr := r.URL.Query().Get("event_id")
+		
+		// Senior-Highload допущение: для простоты теста парсим ID, 
+		// в будущем мы заменим это на чтение полноценного JSON-тела (DTO)
+		var eventID int64
+		_, err := fmt.Sscanf(eventIDStr, "%d", &eventID)
+		if err != nil || eventID <= 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":"invalid or missing event_id"}`))
+			return
+		}
+
+		// Вызываем нашу транзакционную Кассу, созданную сегодня!
+		ticket, err := bookingUseCase.HoldTicket(r.Context(), eventID)
+		if err != nil {
+			log.Printf("[ERROR] Ошибка бронирования: %v", err)
+			w.WriteHeader(http.StatusConflict) // 409 Conflict — идеальный статус для гонки данных
+			w.Write([]byte(`{"error":"ticket already held or sold"}`))
+			return
+		}
+
+		// Отдаем клиенту успешный ответ с деталями его брони
+		w.WriteHeader(http.StatusCreated) // 201 Created
+		fmt.Fprintf(w, `{"message":"success","ticket_id":"%s","status":"%s"}`, ticket.ID, ticket.Status)
 	})
 
 	// =========================================================================
