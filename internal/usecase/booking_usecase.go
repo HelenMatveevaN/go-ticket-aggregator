@@ -34,11 +34,15 @@ func (u *BookingUseCase) HoldTicket(ctx context.Context, eventID int64) (*domain
 
 	var reservedTicket *domain.Ticket
 
-	// Запускаем транзакцию через ваш PostgresTxManager
+	// Просим TxManager открыть транзакцию. 
+    // передаем внутрь функцию-замыкание
+    // u.txManager.WithinTransaction — мы вызываем менеджера
+    // А всё, что идет дальше внутри func(txCtx) — это наша инструкция (письмо для него).
 	err := u.txManager.WithinTransaction(ctx, func(txCtx context.Context) error {
 		
-		// 1. Ищем свободный билет и блокируем его строку (SELECT FOR UPDATE)
-		ticket, err := u.ticketRepo.GetAvailableTicketWithLock(txCtx, eventID)
+		// Вот этот кусок кода НЕ ВЫПОЛНЯЕТСЯ СРАЗУ. 
+    	// Это просто текст инструкции: "Сначала локни билет, потом обнови статус".
+    	ticket, err := u.ticketRepo.GetAvailableTicketWithLock(txCtx, eventID)
 		if err != nil {
 			return err
 		}
@@ -49,6 +53,7 @@ func (u *BookingUseCase) HoldTicket(ctx context.Context, eventID int64) (*domain
 		}
 
 		// 3. Сохраняем измененное состояние доменного объекта в базу данных
+		// Передаем ту же txCtx во второй метод репозитория
 		if err := u.ticketRepo.UpdateStatus(txCtx, ticket); err != nil {
 			return fmt.Errorf("failed to save ticket booking: %w", err)
 		}

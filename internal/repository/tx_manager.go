@@ -45,22 +45,29 @@ func (tm *PostgresTxManager) WithinTransaction(ctx context.Context, fn func(ctx 
 		return fn(ctx) //если транз-я уже идет, просто выполняем ф-ю дальше
 	}
 
-	//запускаем атомарную транзацию (если еще не была запущена)
-	tx, err := tm.pool.Begin(ctx)
+	// Менеджер делает техническую работу — открывает транзакцию в Postgres
+    tx, err := tm.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("unable to start transaction: %w", err)
 	}
 
+	// Кладем транзакцию tx в контекст под секретным ключом. 
+	// Рождается «заряженный» контекст txCtx!
 	txCtx := context.WithValue(ctx, txKey{}, tx)
+
+    // Менеджер разворачивает поданную на вход инструкцию от UseCase и выполняет ее
 	err = fn(txCtx)
 
+	// Инструкция выполнилась. Менеджер смотрит на результат:
 	if err != nil {
+		// Если в инструкции что-то пошло не так — откат
 		if rbErr := tx.Rollback(ctx); rbErr != nil {
 			return fmt.Errorf("transaction error: %v, rollback failed: %w", err, rbErr)
 		}
 		return err
 	}
 
+	// Если всё прошло гладко — сохраняем!
 	if cmErr := tx.Commit(ctx); cmErr != nil {
 		return fmt.Errorf("failed to commit transaction: %w", cmErr)
 	}
@@ -68,12 +75,13 @@ func (tm *PostgresTxManager) WithinTransaction(ctx context.Context, fn func(ctx 
 	return nil
 }
 
-//Магия переключения (между пулом и транзакцией - в зависимости от того, что нашли)
+//Тумблер переключения (между пулом и транзакцией - в зависимости от того, что нашли)
 func (tm *PostgresTxManager) GetQueryable(ctx context.Context) Queryable {
+	// Тумблер запускает сканер контекста:
 	if tx, ok := ctx.Value(txKey{}).(pgx.Tx); ok {
-		return tx //возвращаем транзакцию
+		return tx // Сканер сказал "Да! Транзакция внутри!". Возвращаем tx.
 	}
-	return tm.pool //возвращаем пул
+	return tm.pool // Если бы сканер сказал "Пусто", вернулся бы общий пул.
 }
 
 

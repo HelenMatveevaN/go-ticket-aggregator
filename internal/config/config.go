@@ -32,8 +32,8 @@ type HTTPConfig struct {
 type PostgresConfig struct {
 	// Если в системе задана DATABASE_URL, она полностью перекроет строку из YAML
 	URL					string				`yaml:"url" env:"DATABASE_URL" env-required:"true"`
-	MaxConns			int32				`yaml:"max_conns" env-default:"50"`
 	MinConns			int32				`yaml:"min_conns" env-default:"10"`
+	MaxConns			int32				`yaml:"max_conns" env-default:"50"`
 	MaxConnIdleTime		time.Duration		`yaml:"max_conn_idle_time" env-default:"15m"`
 }
 

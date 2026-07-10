@@ -42,8 +42,12 @@ func (r *PostgresTicketRepository) GetAvailableTicketWithLock(ctx context.Contex
 	var ticket domain.Ticket
 	var priceCents int64
 
+	// ТАК вызывается тумблер! Мы передаем ему наш ctx (который на самом деле txCtx)
+	queryableObject := tm.GetQueryable(ctx)
+
 	// Безопасно достаем транзакцию или пул через хелпер GetQueryable
-	err := tm.GetQueryable(ctx).QueryRow(ctx, query, eventID).Scan(
+	// Выполняем SQL-запрос через тот объект, который вернул тумблер
+	err := queryableObject.QueryRow(ctx, query, eventID).Scan(
 		&ticket.ID,
 		&ticket.ZoneID,
 		&ticket.SeatID,

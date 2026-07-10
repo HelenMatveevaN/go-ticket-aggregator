@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	//"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	//"time"
 
 	"github.com/go-redis/redis/v8"
 
@@ -217,7 +215,7 @@ func main(){
 			return
 		}
 
-		// Вызываем нашу транзакционную Кассу, созданную сегодня!
+		// ЗДЕСЬ ПОЛЬЗОВАТЕЛЬ ЧЕРЕЗ СЕРВЕР ВЫЗЫВАЕТ USECASE:
 		ticket, err := bookingUseCase.HoldTicket(r.Context(), eventID)
 		if err != nil {
 			log.Printf("[ERROR] Ошибка бронирования: %v", err)
@@ -226,7 +224,7 @@ func main(){
 			return
 		}
 
-		// Отдаем клиенту успешный ответ с деталями его брони
+		// Отдаем ответ пользователю в браузер
 		w.WriteHeader(http.StatusCreated) // 201 Created
 		fmt.Fprintf(w, `{"message":"success","ticket_id":"%s","status":"%s"}`, ticket.ID, ticket.Status)
 	})

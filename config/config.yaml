@@ -11,6 +11,6 @@ http:
 postgres:
   # Дефолтные значения
   url: "postgres://postgres:postgres@postgres-db:5432/ticket_aggregator?sslmode=disable"
-  max_conns: 50 # Макс.число соед-ий
   min_conns: 10 # Мин. число соед-ий
+  max_conns: 50 # Макс.число соед-ий
   max_conn_idle_time: "15m" # Время жизни простаивающего соед-я

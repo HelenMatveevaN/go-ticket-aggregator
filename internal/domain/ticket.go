@@ -56,14 +56,6 @@ func (t *Ticket) Hold() error {
 type TicketRepository interface {
 	GetAvailableTicketWithLock(ctx context.Context, eventID int64) (*Ticket, error)
 	UpdateStatus(ctx context.Context, ticket *Ticket) error
-
-	// НОВЫЙ МЕТОД ДЛЯ ДВОРНИКА:
-	// Находит все билеты со статусом 'held', у которых locked_at меньше, чем expireTime,
-	// и переводит их обратно в 'available'. Возвращает количество очищенных билетов.
-	CancelExpiredBookings(ctx context.Context, expireTime time.Time) (int64, error)
+	//метод "дворн.", => cnt очищ.билетов для locked_at<expireTime, set status held->available
+	CancelExpiredBookings(ctx context.Context, expireTime time.Time) (int64, error) 
 }
-
-// TransactionManager — интерфейс управления транзакциями, который видит домен
-//type TransactionManager interface {
-//	WithinTransaction(ctx context.Context, fn func(ctx context.Context) error) error
-//}

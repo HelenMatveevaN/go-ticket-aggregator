@@ -42,8 +42,7 @@ func NewExpiredBookingWorker(
 func (w *ExpiredBookingWorker) Start(ctx context.Context) {
 	w.logger.Info("Фоновый воркер очистки броней успешно запущен")
 
-	// Создаем тикер — это электронный будильник. 
-	// Он будет «звенеть» (посылать сигнал) каждые X секунд (из поля w.interval).
+	// Создаем тикер — Он будет «звенеть» (посылать сигнал) каждые X секунд (из поля w.interval).
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop() // Когда функция завершится, будильник гарантированно выключится
 
