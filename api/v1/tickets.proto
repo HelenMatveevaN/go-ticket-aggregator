@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package api.v1;
+
+// go_package указывает компилятору, в какую папку Go положить будущий сгенерированный код
+option go_package = "go-ticket-aggregator/api/v1;ticketv1";
+
+// Сервис поиска и стриминга доступных билетов на мероприятия
+service EventTicketService {
+  // Серверный стриминг: клиент запрашивает схему зала/места, а сервер 
+  // пачками стримит доступные категории и свободные кресла в реальном времени
+  rpc StreamAvailableTickets(TicketRequest) returns (stream TicketResponse);
+}
+
+// Запрос на поиск билетов на конкретное событие
+message TicketRequest {
+  string event_id = 1;        // Уникальный ID мероприятия (концерт, матч)
+  string zone_type = 2;       // Фильтр по зоне (напр., "VIP", "Fan-Zone", "Parterre"). Если пусто — отдавать всё.
+}
+
+// Структура доступного билета / места в зале
+message TicketResponse {
+  string ticket_id = 1;       // Уникальный ID конкретного билета/токена места
+  string event_id = 2;        // ID мероприятия
+  string title = 3;           // Название мероприятия (напр., "Концерт Кино")
+  string date_time = 4;       // Дата и время начала (RFC3339)
+  
+  // Геометрия зала
+  string zone_name = 5;       // Название сектора/зоны (напр., "Сектор C2")
+  int32 row = 6;              // Ряд (0, если зона без посадочных мест, как танцпол)
+  int32 seat = 7;             // Место
+
+  // Финансы (Цена строго в копейках для исключения float-ошибок)
+  int64 price_units = 8;      
+  string currency = 9;        // Код валюты (напр., "RUB")
+  
+  string status = 10;         // Текущий статус ("AVAILABLE", "RESERVED_HOLD")
+}
+
+// SearchRequest описывает фильтры для поиска мероприятий на Витрине
+message SearchRequest {
+  string category = 1;     // Категория (например, "concert", "theatre", "sport")
+  string city     = 2;     // Город проведения (например, "Москва")
+  string date_from = 3;    // Искать начиная с даты (например, "2026-07-15")
+}

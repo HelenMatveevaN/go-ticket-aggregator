@@ -4,38 +4,39 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/go-redis/redis/v8"
+	"google.golang.org/grpc"
 
 	"go-ticket-aggregator/internal/config"
 	"go-ticket-aggregator/internal/repository"
 	"go-ticket-aggregator/internal/usecase"
+
+	pb "go-ticket-aggregator/api/v1"
+	transport "go-ticket-aggregator/internal/transport/grpc"
 )
 
 func main(){
-	//load config
+	// Загрузка конфигурации
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	//create context with cancel by signals
+	// Создание контекста с перехватом системных сигналов ОС
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	// =========================================================================
 	// DEPENDENCY INJECTION (DI ГРАФ)
 	// =========================================================================
-	//DI-граф: Конфиг ➔ dbPool ➔ txManager ➔ ticketRepo ➔ ticketUseCase
-
-	//рождение пула (подготовка "линий")
 	dbPool, err := repository.NewPostgresPool(ctx, cfg.Postgres)
 	if err != nil {
-		//log.Fatalf("Failed to initialize Postgres: %v", err)
 		log.Printf("[WARNING] Postgres pool cannot connect: %v. Running in offline-mode.", err)
 	}
 
@@ -139,38 +140,6 @@ func main(){
 	bookingUseCase := usecase.NewBookingUseCase(txManager, ticketRepo)
 	_ = bookingUseCase // Гасим ошибку неиспользованной переменной
 
-
-	// =========================================================================
-	// ИНИЦИАЛИЗАЦИЯ HTTP СЕРВЕРА
-	// =========================================================================
-	server := &http.Server{
-		Addr: ":" + cfg.HTTP.Port,
-	}
-
-	// =========================================================================
-	// паттерн CLOSER (Graceful Shutdown)
-	// =========================================================================
-
-	go func() {
-		<-ctx.Done() //сюда прилетит сигнал Cntrl+C
-		log.Printf("[SHUTDOWN] Graceful shutdown initialized... Closing resources.")
-
-		//даем фикс.вр. на закрытие "хвостов"
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
-		defer cancel()
-
-		// step 1: останавливаем входящий HTTP-трафик
-		log.Printf("[SHUTDOWN] Step 1: Stopping HTTP/gRPC traffic... (No new requests allowed)")
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("[WARNING] HTTP server shutdown error: %v", err)
-		}
-
-		// step 2: закрываем базы данных (только после остановки сервера!)
-		log.Printf("[SHUTDOWN] Step 2: Closing Storage layers...")
-		dbPool.Close()
-		log.Printf("[SHUTDOWN] PostgreSQL connection pool closed cleanly.")
-	}()
-
 	// =========================================================================
 	// РЕГИСТРАЦИЯ МАРШРУТОВ (ЭНДПОИНТОВ)
 	// =========================================================================
@@ -230,12 +199,85 @@ func main(){
 	})
 
 	// =========================================================================
-	// ЗАПУСК СЕРВЕРА
+	// ИНИЦИАЛИЗАЦИЯ HTTP СЕРВЕРА
 	// =========================================================================
-	log.Println("\n[SERVER] Работа завершена. Нажмите Ctrl+C для проверки Closer...")
+	server := &http.Server{
+		Addr: ":" + cfg.HTTP.Port,
+	}
 
-	// ListenAndServe блокирует поток main и держит приложение запущенным
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("HTTP server failed: %v", err)
-	}	
+	// =========================================================================
+	// ИНИЦИАЛИЗАЦИЯ gRPC СЕРВЕРА
+	// =========================================================================
+	lis, err := net.Listen("tcp", ":50051")
+	if err != nil {
+		log.Fatalf("❌ Не удалось запустить TCP-листенер для gRPC: %v", err)
+	}
+
+	grpcServer := grpc.NewServer(
+		grpc.StreamInterceptor(transport.StreamTraceInterceptor()),
+	)
+	eventServer := transport.NewEventServer()
+	//регистрация обработчика
+	pb.RegisterEventTicketServiceServer(grpcServer, eventServer)
+
+	// =========================================================================
+	// АСИНХРОННЫЙ ЗАПУСК СЕРВЕРОВ
+	// =========================================================================
+	// Запуск HTTP
+	go func() {
+		log.Printf("🌍 [HTTP] Сервер запущен на порту %s", cfg.HTTP.Port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("❌ HTTP server failed: %v", err)
+		}
+	}()
+
+	// Запуск gRPC
+	go func() {
+		log.Println("🚀 [gRPC] Сервер стриминга мест запущен на порту :50051")
+		//grpcServer.Serve(lis) - открытие шлюза (прослушивание порта)
+		if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {
+			log.Fatalf("❌ gRPC server failed: %v", err)
+		}
+	}()
+
+	// =========================================================================
+	// паттерн CLOSER (Graceful Shutdown)
+	// =========================================================================
+
+	go func() {
+		<-ctx.Done() //сюда прилетит сигнал Cntrl+C
+		log.Printf("[SHUTDOWN] Graceful shutdown initialized... Closing resources.")
+
+		//даем фикс.вр. на закрытие "хвостов"
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+		defer cancel()
+
+		// step 1: останавливаем входящий HTTP/gRPC трафик
+		log.Printf("[SHUTDOWN] Step 1: Stopping HTTP/gRPC traffic... (No new requests allowed)")
+		
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("[WARNING] HTTP server shutdown error: %v", err)
+		}
+
+		// step 2: закрываем базы данных (только после остановки сервера!)
+		log.Printf("[SHUTDOWN] Step 2: Closing Storage layers...")
+
+		if rdb != nil {
+			_ = rdb.Close()
+			log.Printf("[SHUTDOWN] Redis connection closed.")
+		}
+
+		if dbPool != nil {
+			dbPool.Close()
+			log.Printf("[SHUTDOWN] PostgreSQL connection pool closed cleanly.")
+		}
+	}()	
+
+	log.Println("\n[SERVER] Инициализация завершена. Нажмите Ctrl+C для проверки Closer...")
+
+	// Удерживаем главный поток main, пока контекст не отменится по сигналу из ОС
+	<-ctx.Done()
+	
+	// Даем небольшую паузу горутине Closer, чтобы логи успели напечататься в консоль перед выходом
+	log.Println("[SERVER] Главный поток завершается.")
 }
