@@ -40,6 +40,7 @@ func generateUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
+// Маркировщик запросов (internal/transport/grpc/server.go)
 // StreamInterceptor для сквозного трейсинга стриминговых запросов
 func StreamTraceInterceptor() grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
@@ -84,7 +85,7 @@ func (w *wrappedServerStream) Context() context.Context {
 }
 
 // -------------------------------------------------------------
-// Реализация gRPC-сервера букинга мероприятий
+// Реализация gRPC B2С-сервера букинга мероприятий
 // -------------------------------------------------------------
 
 type EventServer struct {
@@ -96,6 +97,7 @@ func NewEventServer() *EventServer {
 }
 
 // StreamAvailableTickets реализует бизнес-логику стриминга мест
+// gRPC-стриминг устроен как конвейерная лента
 // метод для внешнего клиента
 func (s *EventServer) StreamAvailableTickets(req *pb.TicketRequest, stream pb.EventTicketService_StreamAvailableTicketsServer) error {
 	// Извлекаем Trace ID из контекста для логирования
@@ -135,3 +137,52 @@ func (s *EventServer) StreamAvailableTickets(req *pb.TicketRequest, stream pb.Ev
 
 	return nil
 }
+
+// ---------------------------------------------------------------------
+// Реализация gRPC B2B-сервера поиска по партнерам
+// ---------------------------------------------------------------------
+
+type PartnerSearchServer struct {
+	pb.UnimplementedTicketSearchServiceServer
+}
+
+func NewPartnerSearchServer() *PartnerSearchServer {
+	return &PartnerSearchServer{}
+}
+
+// SearchPartnerTickets реализует контракт высоконагруженного поиска по внешним системам
+func (s *PartnerSearchServer) SearchPartnerTickets(ctx context.Context, req *pb.PartnerSearchRequest) (*pb.PartnerSearchResponse, error) {
+	// Извлекаем наш Trace ID из контекста для сквозного логирования!
+	traceID, _ := ctx.Value(TraceIDKey).(string)
+	log.Printf("[gRPC B2B] Обработка поиска в категории %s для города %s | TraceID: %s", req.Category, req.City, traceID)
+
+	// Имитируем, что мы сделали веерные сетевые запросы к двум внешним партнерам
+	// В будущем здесь будет конкурентный опрос через горутины с таймаутами
+	time.Sleep(150 * time.Millisecond) 
+
+	response := &pb.PartnerSearchResponse{
+		Events: []*pb.PartnerEvent{
+			{
+				PartnerEventId: "ext-evt-991",
+				PartnerName:    "TicketClub",
+				Title:          "Акустический вечер джаза",
+				Venue:          "Клуб Союз",
+				DateTime:       time.Now().Add(72 * time.Hour).Format(time.RFC3339),
+				MinPriceUnits:  120000, // 1200.00 рублей в копейках
+				TotalAvailable: 45,
+			},
+			{
+				PartnerEventId: "ext-evt-772",
+				PartnerName:    "ShowGo",
+				Title:          "Стендап на крыше",
+				Venue:          "Крыша Молл",
+				DateTime:       time.Now().Add(96 * time.Hour).Format(time.RFC3339),
+				MinPriceUnits:  80000,  // 800.00 рублей в копейках
+				TotalAvailable: 120,
+			},
+		},
+	}
+
+	return response, nil
+}
+

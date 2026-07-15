@@ -199,31 +199,34 @@ func main(){
 	})
 
 	// =========================================================================
-	// ИНИЦИАЛИЗАЦИЯ HTTP СЕРВЕРА
+	// ИНИЦИАЛИЗАЦИЯ И СИНХРОННЫЙ ЗАПУСК СЕТЕВЫХ СЕРВЕРОВ
 	// =========================================================================
+
+	// Настраиваем HTTP сервер
 	server := &http.Server{
 		Addr: ":" + cfg.HTTP.Port,
 	}
 
-	// =========================================================================
-	// ИНИЦИАЛИЗАЦИЯ gRPC СЕРВЕРА
-	// =========================================================================
+	// Открываем порт для gRPC (один общий порт для всей gRPC-экосистемы!)
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
 		log.Fatalf("❌ Не удалось запустить TCP-листенер для gRPC: %v", err)
 	}
 
+	// Создаем gRPC-сервер и подключаем интерцептор трейсинга
 	grpcServer := grpc.NewServer(
 		grpc.StreamInterceptor(transport.StreamTraceInterceptor()),
 	)
-	eventServer := transport.NewEventServer()
-	//регистрация обработчика
-	pb.RegisterEventTicketServiceServer(grpcServer, eventServer)
 
-	// =========================================================================
-	// АСИНХРОННЫЙ ЗАПУСК СЕРВЕРОВ
-	// =========================================================================
-	// Запуск HTTP
+	// 1. Регистрируем старый B2C-сервер (стриминг мест в зале)
+	eventServer := transport.NewEventServer()
+	pb.RegisterEventTicketServiceServer(grpcServer, eventServer) //регистрация обработчика
+
+	// 2. Регистрируем новый B2B-сервер (высоконагруженный поиск по партнерам)
+	partnerServer := transport.NewPartnerSearchServer()
+	pb.RegisterTicketSearchServiceServer(grpcServer, partnerServer)
+
+	// Запускаем HTTP-сервер асинхронно
 	go func() {
 		log.Printf("🌍 [HTTP] Сервер запущен на порту %s", cfg.HTTP.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -231,10 +234,9 @@ func main(){
 		}
 	}()
 
-	// Запуск gRPC
+	// Запускаем gRPC-сервер асинхронно (теперь он обслуживает СРАЗУ ДВА сервиса)
 	go func() {
-		log.Println("🚀 [gRPC] Сервер стриминга мест запущен на порту :50051")
-		//grpcServer.Serve(lis) - открытие шлюза (прослушивание порта)
+		log.Println("🚀 [gRPC] Сервер билетного агрегатора запущен на порту :50051 (B2C + B2B контуры)")
 		if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {
 			log.Fatalf("❌ gRPC server failed: %v", err)
 		}
